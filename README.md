@@ -3,7 +3,7 @@
 _Showcase Website_: https://clever-level-302177.framer.app/  
 _A Java/Kotlin roguelike built in Android Studio (Aug 2023 – Dec 2023)_  
 **Course Project – CS2340**  
-**Team Size: 5** | **Architecture: MVVM** | **Game Engine: None**
+**Team Size: 5** | **Architecture: MVVM** | **Language: Java + Kotlin** | **Game Engine: None**
 
 ---
 
@@ -95,6 +95,7 @@ Each has unique attributes and special abilities:
 ### Enemies
 - Includes types like **Ogre**, **Minotaur**, **Golem**, etc.
 - Each has distinct stats and attack behavior
+- **A\* pathfinding** (8-directional with Octile heuristic) for intelligent obstacle-aware chasing
 - Aggro triggered by proximity or ranged hits
 
 ### Items & Interaction
@@ -126,11 +127,14 @@ Each has unique attributes and special abilities:
 ## 🧪 Technical Highlights
 
 - Built **entirely without a game engine**
-- **Java** backend in Android Studio
+- **Java + Kotlin** mixed codebase in Android Studio
 - MVVM for separation of concerns
+- **A\* pathfinding algorithm** (pure Java, zero Android dependencies) for enemy AI navigation
+- Kotlin `data class` and `enum class` for data models with full Java interoperability
+- Memory-safe ViewModel using `Application Context` instead of static Activity references
 - Procedural map generation and object pooling
 - Optimized for performance using **multithreading** and **tick-based loops**
-- Comprehensive **unit testing** for all major game functions
+- Comprehensive **unit testing** including A\* pathfinding test suite
 
 ---
 

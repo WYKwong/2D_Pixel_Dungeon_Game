@@ -15,7 +15,12 @@ import com.example.myapplication.Model.environments.GameMap;
 import com.example.myapplication.Model.environments.MapManager;
 import com.example.myapplication.Model.helper.GameConstants;
 
+import java.util.List;
 import java.util.Random;
+
+import com.example.myapplication.Model.domain.pathfinding.AStarPathfinder;
+import com.example.myapplication.Model.domain.pathfinding.GridAdapter;
+
 public abstract class AbstractEnemy extends Character {
     private long lastDirChange = System.currentTimeMillis();
     private long lastTakeProjectDamage;
@@ -34,6 +39,12 @@ public abstract class AbstractEnemy extends Character {
     private boolean onSkill;
     private boolean alreadyMadeDamageToPlayer;
     private boolean onDeath;
+
+    // A* Pathfinding cache
+    private List<int[]> currentPath;
+    private int pathIndex;
+    private long lastPathCalcTime;
+    private static final long PATH_RECALC_INTERVAL_MS = 500; // Recalculate every 500ms
 
 
     public AbstractEnemy(
@@ -153,44 +164,130 @@ public abstract class AbstractEnemy extends Character {
 
     private void updateMove(double delta, MapManager mapManager, PointF playerPos) {
         GameMap gameMap = mapManager.getCurrentMap();
-        //defaultMoveMode(delta, gameMap);
-
-
 
         currentSpeed = (float) delta * baseSpeed;
-
-
 
         float distanceX = hitBox.centerX() - playerPos.x;
         float distanceY = hitBox.centerY() - playerPos.y;
 
-
-
         double distance = Math.sqrt(Math.pow(distanceX, 2) + Math.pow(distanceY, 2));
 
-
-
-        if (distance <= chaseDistance * GameConstants.Sprite.SIZE) { //怪物检测范围，单位为格
-            chaseMoveMode(distanceX, distanceY, gameMap);
+        if (distance <= chaseDistance * GameConstants.Sprite.SIZE) {
+            chaseMoveMode(distanceX, distanceY, gameMap, playerPos);
         } else {
+            currentPath = null; // Clear path when out of range
             defaultMoveMode(gameMap);
         }
 
     }
 
+    /**
+     * A*-based chase mode: computes a pathfinding route around obstacles
+     * and follows it node-by-node. Falls back to direct chase if A*
+     * cannot find a valid path.
+     */
     private void chaseMoveMode(
             float distanceX,
             float distanceY,
-            GameMap gameMap) {
+            GameMap gameMap,
+            PointF playerPos) {
+
+        // Recalculate A* path at intervals for performance
+        long now = System.currentTimeMillis();
+        if (currentPath == null || pathIndex >= currentPath.size()
+                || now - lastPathCalcTime > PATH_RECALC_INTERVAL_MS) {
+            recalculatePath(gameMap, playerPos);
+            lastPathCalcTime = now;
+        }
+
+        // Follow A* path if available
+        if (currentPath != null && pathIndex < currentPath.size()) {
+            followPath(gameMap);
+        } else {
+            // Fallback: direct chase (original behavior)
+            directChase(distanceX, distanceY, gameMap);
+        }
+    }
+
+    /**
+     * Recalculates the A* path from the enemy's current position to the player.
+     */
+    private void recalculatePath(GameMap gameMap, PointF playerPos) {
+        boolean[][] grid = GridAdapter.toWalkableGrid(gameMap);
+        AStarPathfinder pathfinder = new AStarPathfinder(grid);
+
+        int startX = GridAdapter.pixelToGridX(hitBox.centerX());
+        int startY = GridAdapter.pixelToGridY(hitBox.centerY());
+        int goalX = GridAdapter.pixelToGridX(playerPos.x);
+        int goalY = GridAdapter.pixelToGridY(playerPos.y);
+
+        currentPath = pathfinder.findPath(startX, startY, goalX, goalY);
+        pathIndex = 0;
+    }
+
+    /**
+     * Moves the enemy along the pre-computed A* path, one waypoint at a time.
+     */
+    private void followPath(GameMap gameMap) {
+        int[] target = currentPath.get(pathIndex);
+        float targetPixelX = GridAdapter.gridToPixelX(target[0]);
+        float targetPixelY = GridAdapter.gridToPixelY(target[1]);
+
+        float dx = targetPixelX - hitBox.centerX();
+        float dy = targetPixelY - hitBox.centerY();
+        float dist = (float) Math.sqrt(dx * dx + dy * dy);
+
+        // Reached waypoint — advance to the next one
+        if (dist < currentSpeed * 2) {
+            pathIndex++;
+            if (pathIndex >= currentPath.size()) {
+                return;
+            }
+            target = currentPath.get(pathIndex);
+            targetPixelX = GridAdapter.gridToPixelX(target[0]);
+            targetPixelY = GridAdapter.gridToPixelY(target[1]);
+            dx = targetPixelX - hitBox.centerX();
+            dy = targetPixelY - hitBox.centerY();
+            dist = (float) Math.sqrt(dx * dx + dy * dy);
+        }
+
+        if (dist > 0) {
+            float moveX = (dx / dist) * currentSpeed;
+            float moveY = (dy / dist) * currentSpeed;
+
+            // Update face direction
+            if (dx > 1) {
+                faceDir = GameConstants.FaceDir.RIGHT;
+            } else if (dx < -1) {
+                faceDir = GameConstants.FaceDir.LEFT;
+            }
+
+            // Update move direction for animation
+            if (Math.abs(dx) > Math.abs(dy)) {
+                moveDir = dx > 0 ? GameConstants.MoveDir.RIGHT : GameConstants.MoveDir.LEFT;
+            } else {
+                moveDir = dy > 0 ? GameConstants.MoveDir.DOWN : GameConstants.MoveDir.UP;
+            }
+
+            moveX(gameMap, moveX);
+            moveY(gameMap, moveY);
+        }
+    }
+
+    /**
+     * Direct-line chase fallback when A* cannot find a path.
+     * Preserves the original chase behavior for robustness.
+     */
+    private void directChase(float distanceX, float distanceY, GameMap gameMap) {
         float ratio = Math.abs(distanceY) / Math.abs(distanceX);
-        double angle = Math.atan(ratio); //怪物与玩家的角度
-        float xSpeed = (float) Math.cos(angle); //用角度与直线速度计算斜向速度
+        double angle = Math.atan(ratio);
+        float xSpeed = (float) Math.cos(angle);
         float ySpeed = (float) Math.sin(angle);
         float deltaX = xSpeed * currentSpeed;
         float deltaY = ySpeed * currentSpeed;
 
-        if (xSpeed > ySpeed) { //意味着x角度更大，角色应该随着x调整     实现角色移动时的动画切换
-            if (distanceX > 0) { //正数意味光标在圆环右侧，即朝右移动
+        if (xSpeed > ySpeed) {
+            if (distanceX > 0) {
                 moveDir = GameConstants.MoveDir.LEFT;
             } else {
                 moveDir = GameConstants.MoveDir.RIGHT;
@@ -206,11 +303,9 @@ public abstract class AbstractEnemy extends Character {
         if (distanceX
                 > (float) (Player.getInstance().getHitBoxWidth() / 2 + getHitBoxWidth() / 2)) {
             deltaX *= -1;
-
             moveX(gameMap, deltaX);
         } else if (distanceX
                 < -(float) (Player.getInstance().getHitBoxWidth() / 2 + getHitBoxWidth() / 2)) {
-
             moveX(gameMap, deltaX);
         }
         if (distanceX > 1) {
@@ -225,8 +320,8 @@ public abstract class AbstractEnemy extends Character {
         } else if (distanceY < -1) {
             moveY(gameMap, deltaY);
         }
-
     }
+
 
     private void moveX(GameMap gameMap, float deltaX) {
         float xL = hitBox.left + deltaX;
